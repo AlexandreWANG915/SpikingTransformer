@@ -31,7 +31,7 @@ wandb.init(project="test-project", entity="spikingtransformer")
 #
 ####################################################
 model_name = 'Cifarmodel'
-dataset = 'cifar10'
+dataset = 'cifar100'
 device = 'cuda'
 optimizer = 'adam'
 
