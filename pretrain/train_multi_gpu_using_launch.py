@@ -50,7 +50,7 @@ def getdataset(args):
     device = torch.device(args.device)
     size = args.size
     if args.dataset == 'imagenet':
-        train_path = os.path.join(data_path, 'test')
+        train_path = os.path.join(data_path, 'train/ILSVRC2012_img_train')
         val_path = os.path.join(data_path, 'val')
         transform_train = transforms.Compose([
             transforms.RandomResizedCrop(size),
@@ -60,12 +60,15 @@ def getdataset(args):
         ])
 
         transform_test = transforms.Compose([
-            transforms.Resize(size),
+            transforms.Resize(256),
+            transforms.CenterCrop(size),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
         train_data_set = datasets.ImageFolder(root=train_path, transform=transform_train)
+        # total = len(train_data_set)
+        # train_data_set, _= torch.utils.data.random_split(train_data_set, [40000, total-40000])
 
         val_data_set = datasets.ImageFolder(root=val_path, transform=transform_test)
 
@@ -161,10 +164,7 @@ def main(args):
     open_wandb = args.open_wandb
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
-    if open_wandb:
-        # wandb.init(project="ann2snn", entity="alexandrewang")
-        wandb.init(project="pretrain", entity="spikingtransformer")
-        wandb.init(config=args)
+
 
     # 初始化各进程环境
     init_distributed_mode(args=args)
@@ -176,16 +176,22 @@ def main(args):
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
     checkpoint_path = ""
     num_steps = args.num_steps
-    fangfa = '4reluscracth'
+    fangfa = '4relu'
     conf = [args.dataset,fangfa,str(args.lr)]
     log_dir = '_'.join(conf)
 
-    if not os.path.isdir(log_dir):
-        os.makedirs(log_dir)
+    if open_wandb and rank == 0:
+        # wandb.init(project="ann2snn", entity="alexandrewang")
+        wandb.init(project="pretrain", entity="spikingtransformer", config=args)
+        wandb.init(config=args)
+
+
 
     train_data_set, val_data_set, model = getdataset(args)
 
     if rank == 0:  # 在第一个进程中打印信息，并实例化tensorboard
+        if not os.path.isdir(log_dir):
+            os.makedirs(log_dir)
         print(args)
         print('Start Tensorboard with "tensorboard --logdir=runs", view at http://localhost:6006/')
         tb_writer = SummaryWriter()
@@ -203,7 +209,8 @@ def main(args):
     train_batch_sampler = torch.utils.data.BatchSampler(
         train_sampler, batch_size, drop_last=False)
 
-    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 4])  # number of workers
+    # nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 4])  # number of workers
+    nw = 4
     if rank == 0:
         print('Using {} dataloader workers every process'.format(nw))
     train_loader = torch.utils.data.DataLoader(train_data_set,
@@ -249,7 +256,7 @@ def main(args):
         #     if "head" in k:
         #         del weights_dict[k]
         # print(model.load_state_dict(weights_dict, strict=False))
-        print("load weights!")
+        # print("load weights!")
     else:
         checkpoint_path = os.path.join(tempfile.gettempdir(), "initial_weights.pt")
         # 如果不存在预训练权重，需要将第一个进程中的权重保存，然后其他进程载入，保持初始化权重一致
@@ -305,7 +312,7 @@ def main(args):
                                                    epoch=epoch,
                                                    num_steps=num_steps)
         train_acc = train_sum_num / train_sampler.total_size
-        if open_wandb:
+        if open_wandb and rank==0:
             wandb.log({"train_loss": mean_loss})
             wandb.log({"train_acc": train_acc})
             wandb.log({'lr': float(optimizer.state_dict()['param_groups'][0]['lr'])})
@@ -320,7 +327,7 @@ def main(args):
                                   num_steps=num_steps,
                                   epoch=epoch)
         acc = sum_num / val_sampler.total_size
-        if open_wandb:
+        if open_wandb and rank==0:
             wandb.log({"test_loss": loss})
             wandb.log({"test_acc": acc})
 
@@ -357,7 +364,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_classes', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=90)
     parser.add_argument('--num_steps', type=int, default=10)
     parser.add_argument('--size', type=int, default=224)
     parser.add_argument('--lr', type=float, default=5e-4)
@@ -369,13 +376,13 @@ if __name__ == '__main__':
 
     # 数据集所在根目录
     # https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz
-    parser.add_argument('--data-path', type=str, default="../Cifar100")
-    parser.add_argument('--dataset', type=str, default="Cifar100")
+    parser.add_argument('--data-path', type=str, default="/hpc/users/CONNECT/q18010301/imagenet")
+    parser.add_argument('--dataset', type=str, default="imagenet")
     parser.add_argument('--model', type=str, default="swin")
 
     # resnet34 官方权重下载地址   ../weights/vit_base_patch16_224.pth
     # https://download.pytorch.org/models/resnet34-333f7ec4.pth
-    parser.add_argument('--weights', type=str, default='/hpc/users/CONNECT/q18010301/ziqing/vision_transformer/train_multi_GPU/Cifar100_4reluscracth_0.0001/epoch32_0.708.pth',
+    parser.add_argument('--weights', type=str, default='/hpc/users/CONNECT/q18010301/ziqing/vision_transformer/train_multi_GPU/Cifar10_4reluV2_0.0001/epoch76_0.960.pth',
                         help='initial weights path')
     parser.add_argument('--freeze-layers', type=bool, default=False)
     # 不要改该参数，系统会自动分配
